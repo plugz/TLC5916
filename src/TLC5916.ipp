@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 
-// bitbanging
-TLC5916::TLC5916(uint8_t sdiPin, uint8_t sckPin, uint8_t lePin, uint8_t oePin) {
+template<uint8_t TCount>
+TLC5916<TCount>::TLC5916(uint8_t sdiPin, uint8_t sckPin, uint8_t lePin, uint8_t oePin) {
     _sdiPin = sdiPin;
     _sckPin = sckPin;
     _lePin = lePin;
@@ -17,48 +17,43 @@ TLC5916::TLC5916(uint8_t sdiPin, uint8_t sckPin, uint8_t lePin, uint8_t oePin) {
     _init();
 }
 
-// hw spi
-TLC5916::TLC5916(SPIClass* spiWire, uint8_t sckPin, uint8_t lePin, uint8_t oePin) {
-    _sdiPin = NO_PIN;
-    _sckPin = sckPin;
-    _lePin = lePin;
-    _oePin = oePin;
-    _spiWire = spiWire;
-
-    _init();
-}
-
-void setBit(unsigned int bitIdx, bool value) {
-    uint8_t& byte = _data[sizeof(_data) - (bitIdx / 8) - 1];
+template<uint8_t TCount>
+void TLC5916<TCount>::setBit(unsigned int bitIdx, bool value) {
+    uint8_t& byte = _data[count - (bitIdx / 8) - 1];
     uint8_t bitMask = 1 << (bitIdx % 8);
     if (value) {
         byte |= bitMask;
     } else {
-        byte &= bitMask;
+        byte &= ~bitMask;
     }
 }
 
-void sendData() { _writeData(); }
+template<uint8_t TCount>
+void TLC5916<TCount>::sendData() { _writeData(_data); }
 
-void enableSink() {
+template<uint8_t TCount>
+void TLC5916<TCount>::enableSink() {
     if (_oePin == NO_PIN)
         return;
     digitalWrite(_oePin, LOW);
 }
 
-void disableSink() {
+template<uint8_t TCount>
+void TLC5916<TCount>::disableSink() {
     if (_oePin == NO_PIN)
         return;
     digitalWrite(_oePin, HIGH);
 }
 
-void setConfig(uint8_t tlcIdx, bool currentMultiplier, bool currentLimiter, uint8_t currentValue) {
+template<uint8_t TCount>
+void TLC5916<TCount>::setConfig(uint8_t tlcIdx, bool currentMultiplier, bool currentLimiter, uint8_t currentValue) {
     setConfig(tlcIdx, (currentMultiplier ? 0b10000000 : 0) | (currentLimiter ? 0b01000000 : 0) |
                           (currentValue & 0b00111111));
 }
 
-void setConfig(uint8_t tlcIdx, uint8_t config) {
-    uint8_t& byte = _config[sizeof(_config) - tlcIdx - 1];
+template<uint8_t TCount>
+void TLC5916<TCount>::setConfig(uint8_t tlcIdx, uint8_t config) {
+    uint8_t& byte = _config[count - tlcIdx - 1];
     byte = 0;
     for (unsigned int i = 0; i < 8; ++i) {
         if (config & (1 << (8 - i - 1)))
@@ -66,20 +61,28 @@ void setConfig(uint8_t tlcIdx, uint8_t config) {
     }
 }
 
-void applyConfigs() {
+template<uint8_t TCount>
+void TLC5916<TCount>::applyConfigs() {
     if (_oePin == NO_PIN)
         return;
 
     disableSink();
     _modeSwitch(true);
-    _writeData();
+    _writeData(_config);
     _modeSwitch(false);
     enableSink();
 }
 
-void TLC5916::_init() {
-    memset(_data, sizeof(_data), 0);
-    memset(_config, sizeof(_data), 0xff);
+template<uint8_t TCount>
+void TLC5916<TCount>::setSpiWire(SPIClass* spiWire, uint32_t spiSpeed) {
+    _spiWire = spiWire;
+    _spiSpeed = spiSpeed;
+}
+
+template<uint8_t TCount>
+void TLC5916<TCount>::_init() {
+    memset(_data, 0, count);
+    memset(_config, 0xff, count);
     if (_oePin != NO_PIN) {
         digitalWrite(_oePin, HIGH); // disable sink
         pinMode(_oePin, OUTPUT);
@@ -88,15 +91,17 @@ void TLC5916::_init() {
     pinMode(_lePin, OUTPUT);
 }
 
-void TLC5916::_writeData() {
+template<uint8_t TCount>
+void TLC5916<TCount>::_writeData(uint8_t* data) {
+    static uint8_t recvBuffer[count];
     if (_spiWire) {
-        // max is 30MHz
-        _spiWire->beginTransaction(SPISettings(30000000, MSBFIRST, SPI_MODE0));
-        _spiWire->transfer(_data, sizeof(_data));
+        _spiWire->beginTransaction(SPISettings(_spiSpeed, MSBFIRST, SPI_MODE0));
+        _spiWire->transfer(data, recvBuffer, count);
         _spiWire->endTransaction();
     } else {
-        for (unsigned int i = 0; i < sizeof(_data); ++i) {
-            auto const byte = _data[i];
+        // bitbanging
+        for (unsigned int i = 0; i < count; ++i) {
+            auto const byte = data[i];
             for (unsigned int j = 0; j < 8; ++j) {
                 // data is already stored reversed -> write MSB first
                 uint8_t const bitMask = 1 << (8 - j - 1);
@@ -108,18 +113,21 @@ void TLC5916::_writeData() {
     _leFlash();
 }
 
-void TLC5916::_leFlash() {
+template<uint8_t TCount>
+void TLC5916<TCount>::_leFlash() {
     digitalWrite(_lePin, HIGH);
     digitalWrite(_lePin, LOW);
 }
 
-void TLC5916::_sckFlash() {
+template<uint8_t TCount>
+void TLC5916<TCount>::_sckFlash() {
     digitalWrite(_sckPin, HIGH);
     digitalWrite(_sckPin, LOW);
 }
 
-void TLC5916::_modeSwitch(bool special) {
-    if (_eoPin == NO_PIN)
+template<uint8_t TCount>
+void TLC5916<TCount>::_modeSwitch(bool special) {
+    if (_oePin == NO_PIN)
         return;
 
     _sckFlash();
